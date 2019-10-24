@@ -13,6 +13,9 @@ make build
 cp ./bin/kubectl-operator_dev <PATH> # Where <PATH> is a directory in your $PATH
 ```
 
+Alternatively, you can grab the pre-build binaries from the [release page](https://github.com/mfojtik/operator-dev-plugin/releases). After downloading
+the binary, remove the `_linux` or `_darwin` suffix and copy the binary to your `$PATH`.
+
 #### Usage
 
 The `override` command is used when developer want to override the operator container image with custom built image, typically for testing purposes.

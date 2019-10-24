@@ -39,8 +39,12 @@ func NewOverrideOptions(streams genericclioptions.IOStreams) *OverrideOptions {
 
 var (
 	operatorOverrideExample = `
-	# replace will tell cluster version operator to stop managing given operator and replace its image with custom image
-	%[1]s clusteroperator/kube-apiserver --image=docker.io/foo/apiserver:debug
+	# override will tell cluster version operator to stop managing given operator and replace its image with custom image
+	# the 'kube-apiserver' must be valid cluster operator name (oc get clusteroperators).
+	%[1]s kube-apiserver --image=docker.io/foo/apiserver:debug
+
+    # will make the openshift apiserver operator managed again
+	%[1]s openshift-apiserver --managed
 `
 )
 
@@ -50,7 +54,7 @@ func NewCmdOperatorReplace(streams genericclioptions.IOStreams) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "override <clusteroperator/name>",
 		Short:   "Override the target operator image",
-		Example: fmt.Sprintf(operatorOverrideExample, "oc operator-dev replace"),
+		Example: fmt.Sprintf(operatorOverrideExample, "oc operator-dev override"),
 		RunE: func(c *cobra.Command, args []string) error {
 			o.args = args
 			if err := o.Validate(); err != nil {

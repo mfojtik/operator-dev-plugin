@@ -6,7 +6,12 @@ changes.
 
 #### Installation
 
-
+```shell script
+go get -u github.com/mfojtik/operator-dev-plugin
+cd $GOPATH/src/github.com/mfojtik/operator-dev-plugin
+make build
+cp ./bin/kubectl-operator_dev <PATH> # Where <PATH> is a directory in your $PATH
+```
 
 #### Usage
 
@@ -15,11 +20,11 @@ The command will edit `clusterversion/version` object and set the right override
 and set the desired image for it.
 
 ```shell script
-$ oc operator-dev override kube-apiserver --image=docker.io/mfojtik/custom-image:debug
+oc operator-dev override kube-apiserver --image=docker.io/mfojtik/custom-image:debug
 ```
 
 In case developer want to revert this change and make cluster version operator manage the operator again:
 
 ```shell script
-$ oc operator-dev override kube-apiserver --managed
+oc operator-dev override kube-apiserver --managed
 ```

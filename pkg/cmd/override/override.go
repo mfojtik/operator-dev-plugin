@@ -2,7 +2,6 @@ package override
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -24,6 +23,9 @@ type OverrideOptions struct {
 	args    []string
 	image   string
 	managed bool
+
+	dynamicClient dynamic.Interface
+	kubeClient    kubernetes.Interface
 
 	genericclioptions.IOStreams
 }
@@ -60,6 +62,9 @@ func NewCmdOperatorReplace(streams genericclioptions.IOStreams) *cobra.Command {
 			if err := o.Validate(); err != nil {
 				return err
 			}
+			if err := o.Complete(); err != nil {
+				return err
+			}
 			return o.Run()
 		},
 	}
@@ -71,15 +76,20 @@ func NewCmdOperatorReplace(streams genericclioptions.IOStreams) *cobra.Command {
 	return cmd
 }
 
+// getOperatorNamespace guess the namespace where the operator is being deployed.
+// TODO: This should not be necessary and we should have this information as related object in clusteroperator/foo
 func getOperatorNamespace(operatorName string) string {
 	operatorNamespace := strings.TrimPrefix(operatorName, "openshift-")
 	return "openshift-" + operatorNamespace + "-operator"
 }
 
+// getOperatorDeploymentName guess the deployment name of the operator.
+// TODO: This should not be necessary and we should have this information as related object in clusteroperator/foo
 func getOperatorDeploymentName(operatorName string) string {
 	return operatorName + "-operator"
 }
 
+// makeJSONPatch construct the JSON patch string used to patch the clusterversion/version object
 func makeJSONPatch(operatorName string, managed bool) []byte {
 	unmanagedString := "true"
 	if managed {
@@ -105,7 +115,7 @@ func (o *OverrideOptions) printOut(message string, objs ...interface{}) {
 	}
 }
 
-func (o *OverrideOptions) Run() error {
+func (o *OverrideOptions) Complete() error {
 	restConfig, err := o.configFlags.ToRESTConfig()
 	if err != nil {
 		return err
@@ -115,38 +125,47 @@ func (o *OverrideOptions) Run() error {
 	if err != nil {
 		return err
 	}
+	o.dynamicClient = dynamicClient
+
+	kubeClient, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return err
+	}
+	o.kubeClient = kubeClient
+
+	return nil
+}
+
+func (o *OverrideOptions) Run() error {
+	// TODO: this should really come from discovery, but lets be lazy
+	clusterOperatorGvr := schema.GroupVersionResource{Group: "config.openshift.io", Version: "v1", Resource: "clusteroperators"}
+	clusterVersionGvr := schema.GroupVersionResource{Group: "config.openshift.io", Version: "v1", Resource: "clusterversions"}
 
 	// check if the cluster operator name is a valid operator
-	if _, err := dynamicClient.Resource(schema.GroupVersionResource{
-		Group:    "config.openshift.io",
-		Version:  "v1",
-		Resource: "clusteroperators",
-	}).Get(o.args[0], metav1.GetOptions{}); err != nil {
-		return err
+	if _, err := o.dynamicClient.Resource(clusterOperatorGvr).Get(o.args[0], metav1.GetOptions{}); err != nil {
+		return fmt.Errorf("operator %q is not valid operator: %v", o.args[0], err)
 	}
 
-	if _, err := dynamicClient.Resource(schema.GroupVersionResource{
-		Group:    "config.openshift.io",
-		Version:  "v1",
-		Resource: "clusterversions",
-	}).Patch("version", types.MergePatchType, makeJSONPatch(o.args[0], o.managed), metav1.PatchOptions{}); err != nil {
-		return err
+	if _, err := o.dynamicClient.Resource(clusterVersionGvr).Patch("version", types.MergePatchType, makeJSONPatch(o.args[0], o.managed), metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("failed to patch clusterversion/version: %v", err)
 	}
 
+	// if --managed is used, patch the clusterversion to unmanaged: false and exit
 	if o.managed {
-		o.printOut("-> Operator %q now managed ...\n", getOperatorNamespace(o.args[0])+"/"+getOperatorDeploymentName(o.args[0]))
+		o.printOut("-> Operator %q now managed ...\n", getOperatorDeploymentName(o.args[0]))
 		return nil
 	}
 
-	o.printOut("-> Operator %q is not managed ...\n", getOperatorNamespace(o.args[0])+"/"+getOperatorDeploymentName(o.args[0]))
+	o.printOut("-> Operator %q is not managed ...\n", getOperatorDeploymentName(o.args[0]))
 
 	// In some case CVO will take time to reconcile new config, so give it 1s for starter
 	// TODO: The ClusterVersion operator should really reflect the current state in it's status
 	time.Sleep(1 * time.Second)
 
-	kubeClient := kubernetes.NewForConfigOrDie(restConfig)
+	// update the operator deployment with provided image
+	// TODO: verify the operator image was really changed
 	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		operatorDeployment, err := kubeClient.AppsV1().Deployments(getOperatorNamespace(o.args[0])).Get(getOperatorDeploymentName(o.args[0]), metav1.GetOptions{})
+		operatorDeployment, err := o.kubeClient.AppsV1().Deployments(getOperatorNamespace(o.args[0])).Get(getOperatorDeploymentName(o.args[0]), metav1.GetOptions{})
 		if err != nil {
 			return fmt.Errorf("unable to get deployment: %v", err)
 		}
@@ -156,14 +175,13 @@ func (o *OverrideOptions) Run() error {
 		for i := range operatorDeployment.Spec.Template.Spec.InitContainers {
 			operatorDeployment.Spec.Template.Spec.Containers[i].Image = o.image
 		}
-		log.Printf("containers: %#+v", operatorDeployment.Spec.Template.Spec.Containers)
-		_, err = kubeClient.AppsV1().Deployments(getOperatorNamespace(o.args[0])).Update(operatorDeployment)
+		_, err = o.kubeClient.AppsV1().Deployments(getOperatorNamespace(o.args[0])).Update(operatorDeployment)
 		return err
 	}); err != nil {
 		return err
 	}
 
-	o.printOut("-> Operator %q image changed to %q  ...\n", getOperatorNamespace(o.args[0])+"/"+getOperatorDeploymentName(o.args[0]), o.image)
+	o.printOut("-> Operator %q image is now %q  ...\n", getOperatorDeploymentName(o.args[0]), o.image)
 
 	return nil
 }

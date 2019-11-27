@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -20,9 +21,10 @@ import (
 type OverrideOptions struct {
 	configFlags *genericclioptions.ConfigFlags
 
-	args    []string
-	image   string
-	managed bool
+	args      []string
+	image     string
+	verbosity string
+	managed   bool
 
 	dynamicClient dynamic.Interface
 	kubeClient    kubernetes.Interface
@@ -70,6 +72,7 @@ func NewCmdOperatorReplace(streams genericclioptions.IOStreams) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&o.image, "image", o.image, "image to use for given operator")
+	cmd.Flags().StringVar(&o.verbosity, "verbosity", o.verbosity, "set the verbosity level for operator")
 	cmd.Flags().BoolVar(&o.managed, "managed", false, "set to true if you want cluster version operator to manage this operator")
 	o.configFlags.AddFlags(cmd.Flags())
 
@@ -80,7 +83,12 @@ func NewCmdOperatorReplace(streams genericclioptions.IOStreams) *cobra.Command {
 // TODO: This should not be necessary and we should have this information as related object in clusteroperator/foo
 func getOperatorNamespace(operatorName string) string {
 	operatorNamespace := strings.TrimPrefix(operatorName, "openshift-")
-	return "openshift-" + operatorNamespace + "-operator"
+	switch operatorName {
+	case "insights":
+		return "openshift-insights"
+	default:
+		return "openshift-" + operatorNamespace + "-operator"
+	}
 }
 
 // getOperatorDeploymentName guess the deployment name of the operator.
@@ -142,7 +150,8 @@ func (o *OverrideOptions) Run() error {
 	clusterVersionGvr := schema.GroupVersionResource{Group: "config.openshift.io", Version: "v1", Resource: "clusterversions"}
 
 	// check if the cluster operator name is a valid operator
-	if _, err := o.dynamicClient.Resource(clusterOperatorGvr).Get(o.args[0], metav1.GetOptions{}); err != nil {
+	_, err := o.dynamicClient.Resource(clusterOperatorGvr).Get(o.args[0], metav1.GetOptions{})
+	if err != nil {
 		return fmt.Errorf("operator %q is not valid operator: %v", o.args[0], err)
 	}
 
@@ -171,6 +180,9 @@ func (o *OverrideOptions) Run() error {
 		}
 		for i := range operatorDeployment.Spec.Template.Spec.Containers {
 			operatorDeployment.Spec.Template.Spec.Containers[i].Image = o.image
+			if len(o.verbosity) > 0 {
+				operatorDeployment.Spec.Template.Spec.Containers[i].Args = append(operatorDeployment.Spec.Template.Spec.Containers[i].Args, fmt.Sprintf("-v=%s", o.verbosity))
+			}
 		}
 		for i := range operatorDeployment.Spec.Template.Spec.InitContainers {
 			operatorDeployment.Spec.Template.Spec.Containers[i].Image = o.image

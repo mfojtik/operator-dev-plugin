@@ -37,7 +37,7 @@ jobs:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: ./bin/kubectl-operator_dev_linux.gz
         asset_name: kubectl-operator_dev_linux.gz
-        asset_content_type: application/gzip
+        asset_content_type: application/octet-stream
     - name: Upload Darwin Release Asset
       id: upload-release-darwin-asset
       uses: actions/upload-release-asset@v1.0.1
@@ -47,4 +47,4 @@ jobs:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: ./bin/kubectl-operator_dev_darwin.gz
         asset_name: kubectl-operator_dev_darwin.gz
-        asset_content_type: application/gzip
+        asset_content_type: application/octet-stream

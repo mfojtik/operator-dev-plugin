@@ -25,4 +25,7 @@ jobs:
         fi
 
     - name: Build
-      run: go build -v -o kubectl-operator_dev ./cmd
+      run: go build -v -o kubectl-operator_dev ./cmd/kubectl-operator_dev
+
+    - name: Test Unit
+      run: go test -race -v -o ./...

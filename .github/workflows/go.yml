@@ -23,7 +23,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
       with:
         tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
+        release_name: Nightly Release
         body: |
           Automated release
         draft: false
@@ -35,7 +35,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./kubectl-operator_dev_linux.gz
+        asset_path: ./bin/kubectl-operator_dev_linux.gz
         asset_name: kubectl-operator_dev_linux.gz
         asset_content_type: application/gzip
     - name: Upload Darwin Release Asset
@@ -45,6 +45,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./kubectl-operator_dev_darwin.gz
+        asset_path: ./bin/kubectl-operator_dev_darwin.gz
         asset_name: kubectl-operator_dev_darwin.gz
         asset_content_type: application/gzip

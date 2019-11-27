@@ -29,7 +29,7 @@ jobs:
         draft: false
         prerelease: true
     - name: Upload Linux Release Asset
-      id: upload-release-asset
+      id: upload-release-linux-asset
       uses: actions/upload-release-asset@v1.0.1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -39,7 +39,7 @@ jobs:
         asset_name: kubectl-operator_dev_linux.gz
         asset_content_type: application/gzip
     - name: Upload Darwin Release Asset
-      id: upload-release-asset
+      id: upload-release-darwin-asset
       uses: actions/upload-release-asset@v1.0.1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

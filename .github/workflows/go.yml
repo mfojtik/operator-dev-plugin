@@ -15,7 +15,7 @@ jobs:
     - name: Build
       run: make build-cross
     - name: Test Unit
-      run: go test -mod=vendor -race -v -o ./pkg/override
+      run: go test -mod=vendor -race -v ./pkg/...
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1

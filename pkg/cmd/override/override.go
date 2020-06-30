@@ -23,6 +23,7 @@ type OverrideOptions struct {
 
 	args       []string
 	image      string
+	operand    string
 	deployment string
 	verbosity  string
 	managed    bool
@@ -44,10 +45,11 @@ func NewOverrideOptions(streams genericclioptions.IOStreams) *OverrideOptions {
 
 var (
 	operatorOverrideExample = `
-	# override will tell cluster version operator to stop managing given operator and (optionally) 
-    # replace its image with custom image the 'kube-apiserver' must be valid cluster operator name 
-    # (oc get clusteroperators).
-	%[1]s kube-apiserver --image=docker.io/foo/apiserver:debug
+	# override will tell cluster version operator to stop managing given operator and
+    # - (optionally) replace its operator image
+    # - (optionally) replace its operand image.
+    # The 'kube-apiserver' must be valid cluster operator name (oc get clusteroperators).
+	%[1]s kube-apiserver --image=docker.io/foo/apiserver-operator:debug --operand-image docker.io/foo/apiserver:debug
 
     # will make the openshift apiserver operator managed again
 	%[1]s openshift-apiserver --managed
@@ -74,6 +76,7 @@ func NewCmdOperatorReplace(streams genericclioptions.IOStreams) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&o.image, "image", o.image, "image to use for given operator")
+	cmd.Flags().StringVar(&o.operand, "operand-image", o.operand, "image to use for given operator's operand (only supports those with IMAGE environment variable in the operator deployment)")
 	cmd.Flags().StringVar(&o.verbosity, "verbosity", o.verbosity, "set the verbosity level for operator")
 	cmd.Flags().BoolVar(&o.managed, "managed", false, "set to true if you want cluster version operator to manage this operator")
 	cmd.Flags().StringVar(&o.deployment, "deployment", o.deployment, "custom deployment name")
@@ -108,7 +111,7 @@ func makeJSONPatch(ns, name string, managed bool) []byte {
 	if managed {
 		unmanagedString = "false"
 	}
-	return []byte(fmt.Sprintf(`{"spec":{"overrides":[{"group":"apps/v1","kind":"Deployment","name":"%s","namespace":"%s","unmanaged":%s}]}}`,
+	return []byte(fmt.Sprintf(`{"spec":{"overrides":[{"group":"apps/v1","kind":"Deployment","namespace":"%s","name":"%s","unmanaged":%s}]}}`,
 		ns, name, unmanagedString))
 }
 
@@ -197,29 +200,53 @@ func (o *OverrideOptions) Run() error {
 	time.Sleep(1 * time.Second)
 
 	// update the operator deployment with provided image
-	if len(o.image) > 0 {
-		// TODO: verify the operator image was really changed
-		if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-			operatorDeployment, err := o.kubeClient.AppsV1().Deployments(deploymentNS).Get(deploymentName, metav1.GetOptions{})
-			if err != nil {
-				return fmt.Errorf("unable to get deployment: %v", err)
-			}
-			for i := range operatorDeployment.Spec.Template.Spec.Containers {
+	// TODO: verify the operator image was really changed
+	operandUpdated := false
+	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		operatorDeployment, err := o.kubeClient.AppsV1().Deployments(deploymentNS).Get(deploymentName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("unable to get deployment: %v", err)
+		}
+		for i := range operatorDeployment.Spec.Template.Spec.Containers {
+			if len(o.image) > 0 {
 				operatorDeployment.Spec.Template.Spec.Containers[i].Image = o.image
-				if len(o.verbosity) > 0 {
-					operatorDeployment.Spec.Template.Spec.Containers[i].Args = append(operatorDeployment.Spec.Template.Spec.Containers[i].Args, fmt.Sprintf("-v=%s", o.verbosity))
+			}
+
+			if len(o.verbosity) > 0 {
+				operatorDeployment.Spec.Template.Spec.Containers[i].Args = append(operatorDeployment.Spec.Template.Spec.Containers[i].Args, fmt.Sprintf("-v=%s", o.verbosity))
+			}
+
+			for j, ev := range operatorDeployment.Spec.Template.Spec.Containers[i].Env {
+				if ev.Name == "OPERATOR_IMAGE" && len(o.image) > 0 {
+					operatorDeployment.Spec.Template.Spec.Containers[i].Env[j].Value = o.image
 				}
 			}
-			for i := range operatorDeployment.Spec.Template.Spec.InitContainers {
-				operatorDeployment.Spec.Template.Spec.Containers[i].Image = o.image
-			}
-			_, err = o.kubeClient.AppsV1().Deployments(deploymentNS).Update(operatorDeployment)
-			return err
-		}); err != nil {
-			return err
-		}
 
+			for j, ev := range operatorDeployment.Spec.Template.Spec.Containers[i].Env {
+				if ev.Name == "IMAGE" && len(o.operand) > 0 {
+					operandUpdated = true
+					operatorDeployment.Spec.Template.Spec.Containers[i].Env[j].Value = o.operand
+				}
+			}
+		}
+		for i := range operatorDeployment.Spec.Template.Spec.InitContainers {
+			operatorDeployment.Spec.Template.Spec.Containers[i].Image = o.image
+		}
+		_, err = o.kubeClient.AppsV1().Deployments(deploymentNS).Update(operatorDeployment)
+		return err
+	}); err != nil {
+		return err
+	}
+
+	if len(o.image) > 0 {
 		o.printOut("-> Operator %q image is now %q  ...\n", deploymentName, o.image)
+	}
+	if len(o.operand) > 0 {
+		if operandUpdated {
+			o.printOut("-> Operand image is now %q  ...\n", o.operand)
+		} else {
+			return fmt.Errorf("no IMAGE env var found in the deployment")
+		}
 	}
 
 	return nil

@@ -8,8 +8,8 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -105,16 +105,6 @@ func getOperatorDeploymentName(operatorName string) string {
 	return operatorName + "-operator"
 }
 
-// makeJSONPatch construct the JSON patch string used to patch the clusterversion/version object
-func makeJSONPatch(ns, name string, managed bool) []byte {
-	unmanagedString := "true"
-	if managed {
-		unmanagedString = "false"
-	}
-	return []byte(fmt.Sprintf(`{"spec":{"overrides":[{"group":"apps/v1","kind":"Deployment","namespace":"%s","name":"%s","unmanaged":%s}]}}`,
-		ns, name, unmanagedString))
-}
-
 func (o *OverrideOptions) Validate() error {
 	if len(o.args) == 0 {
 		return fmt.Errorf("clusteroperator/name must be specified")
@@ -183,7 +173,46 @@ func (o *OverrideOptions) Run() error {
 		return fmt.Errorf("unable to get deployment  %s/%s: %v", deploymentNS, deploymentName, err)
 	}
 
-	if _, err := o.dynamicClient.Resource(clusterVersionGvr).Patch("version", types.MergePatchType, makeJSONPatch(deploymentNS, deploymentName, o.managed), metav1.PatchOptions{}); err != nil {
+	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		version, err := o.dynamicClient.Resource(clusterVersionGvr).Get("version", metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+
+		// replace or append override
+		overrides, _, err := unstructured.NestedSlice(version.Object, "spec", "overrides")
+		found := false
+		for _, x := range overrides {
+			override, ok := x.(map[string]interface{})
+			if !ok {
+				continue // ignore
+			}
+
+			kind, _, _ := unstructured.NestedString(override, "kind")
+			group, _, _ := unstructured.NestedString(override, "group")
+			ns, _, _ := unstructured.NestedString(override, "namespace")
+			name, _, _ := unstructured.NestedString(override, "name")
+
+			if kind == "Deployment" && group == "apps/v1" && ns == deploymentNS && name == deploymentName {
+				found = true
+				unstructured.SetNestedField(override, !o.managed, "unmanaged")
+				break
+			}
+		}
+		if !found {
+			overrides = append(overrides, map[string]interface{}{
+				"group":     "apps/v1",
+				"kind":      "Deployment",
+				"namespace": deploymentNS,
+				"name":      deploymentName,
+				"unmanaged": !o.managed,
+			})
+			unstructured.SetNestedField(version.Object, overrides, "spec", "overrides")
+		}
+
+		_, err = o.dynamicClient.Resource(clusterVersionGvr).Update(version, metav1.UpdateOptions{})
+		return err
+	}); err != nil {
 		return fmt.Errorf("failed to patch clusterversion/version: %v", err)
 	}
 
